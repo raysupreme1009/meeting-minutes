@@ -111,6 +111,10 @@
       <label>참석자 (회사·팀 단위)</label>
       <div id="participantsList"></div>
       <button class="small-btn ghost" id="addParticipantBtn" type="button">+ 참석자 그룹 추가</button>
+
+      <label style="margin-top:14px;">회사 전문용어 사전 (선택 사항)</label>
+      <textarea id="glossaryInput" placeholder="사내 제품명, 프로젝트명, 약어, 전문용어 등을 한 줄에 하나씩 또는 쉼표로 구분해서 입력하세요. 예: 프로젝트 오로라, SLA, 온프레미스, 가나전자" style="min-height:60px;"></textarea>
+      <div style="font-size:11.5px;color:var(--ink-soft);margin-top:4px;">여기 적어둔 단어는 ChatGPT 요약 시 음성인식 오류를 교정하는 기준으로 사용됩니다.</div>
     </div>
   </div>
 
@@ -157,6 +161,7 @@
       </p>
       <div class="row">
         <button class="small-btn" id="copyPromptBtn" type="button">① ChatGPT 요약용 내용 복사</button>
+        <button class="small-btn ghost" id="openChatGPTBtn" type="button">🔗 chatgpt.com 새 탭 자동 열기 (짧은 회의만, 실험적)</button>
       </div>
       <textarea id="promptPreview" readonly style="min-height:70px;font-size:11.5px;color:var(--ink-soft);margin-bottom:10px;"></textarea>
       <label>② ChatGPT 답변 붙여넣기</label>
@@ -231,7 +236,9 @@ const downloadBtn = document.getElementById('downloadBtn');
 const errorBox = document.getElementById('errorBox');
 const unsupportedBanner = document.getElementById('unsupportedBanner');
 const copyPromptBtn = document.getElementById('copyPromptBtn');
+const openChatGPTBtn = document.getElementById('openChatGPTBtn');
 const promptPreview = document.getElementById('promptPreview');
+const glossaryInput = document.getElementById('glossaryInput');
 const pasteBackArea = document.getElementById('pasteBackArea');
 const applyPasteBtn = document.getElementById('applyPasteBtn');
 const applyStatus = document.getElementById('applyStatus');
@@ -487,8 +494,28 @@ if(!SR){
   };
 }
 
+function normalizeForCompare(s){ return s.replace(/\s+/g, '').toLowerCase(); }
+
+function isLikelyDuplicate(text){
+  const norm = normalizeForCompare(text);
+  if(!norm) return true;
+  const recent = state.rawLog.slice(-2); // 재시작 직후 겹치는 구간은 보통 직전 1~2개 안에서 발생
+  for(const prev of recent){
+    const pn = normalizeForCompare(prev);
+    if(!pn) continue;
+    if(norm === pn) return true;
+    if(pn.includes(norm) || norm.includes(pn)){
+      const shorter = Math.min(norm.length, pn.length);
+      const longer = Math.max(norm.length, pn.length);
+      if(shorter / longer > 0.6) return true; // 상당 부분 겹치면 재인식으로 판단해 제외
+    }
+  }
+  return false;
+}
+
 function commitFinalText(text){
   if(!text) return;
+  if(isLikelyDuplicate(text)) return; // 음성인식 재시작 시 겹쳐서 인식된 중복 문장 필터링
   state.rawLog.push(text);
   if(state.agenda.length === 0) addTopic('소주제 1');
 
@@ -633,6 +660,9 @@ function buildChatGPTPrompt(){
     .filter(p => p.company.trim() || p.people.trim())
     .map(p => `${p.company} | ${p.people}`).join('; ');
 
+  const glossaryTerms = glossaryInput.value.split(/[\n,]/).map(s => s.trim()).filter(Boolean);
+  const glossaryText = glossaryTerms.length ? glossaryTerms.join(', ') : '(입력 없음)';
+
   const transcript = state.rawLog.length
     ? state.rawLog.map((t, i) => `${i+1}) ${t}`).join('\n')
     : state.agenda.flatMap(a => a.items.map(i => i.content)).join(' ');
@@ -650,7 +680,7 @@ function buildChatGPTPrompt(){
 4. 소주제는 대화의 화제가 바뀌는 지점을 기준으로 나누세요. 화자가 바뀔 때마다 나누지 마세요. 실제로 논의된 주제 수만큼만 만들고, 개수를 억지로 맞추지 마세요.
 5. 각 소주제의 결론(⇒)에는 합의된 사항, 담당자, 기한이 원문에 나와 있다면 함께 적으세요. 결론이 명확하지 않다면 그 소주제에는 ⇒ 줄을 아예 쓰지 마세요.
 6. [참고 정보]에 제목/일시/장소/참석자가 채워져 있으면 그대로 사용하세요. 비어 있으면 원문에서 유추하되, 확실하지 않으면 빈 칸으로 두세요.
-7. 음성인식 특성상 발음이 비슷한 단어로 잘못 인식되거나, 문장이 어색하게 끊기거나 중복되는 경우가 있습니다. 문맥상 명백히 잘못 인식된 것으로 보이는 단어·오탈자는 자연스럽게 교정해서 반영하세요. 다만 원래 의미 자체를 바꾸거나, 원문에 없는 내용을 새로 지어내지는 마세요. 교정이 확실하지 않으면 원문 표현을 그대로 두세요.
+7. 음성인식 특성상 발음이 비슷한 단어로 잘못 인식되거나, 문장이 어색하게 끊기거나 중복되는 경우가 있습니다. [참고 정보]의 "회사 전문용어 사전"에 있는 단어는 실제로 이 회사에서 쓰는 정확한 표기입니다. 원문에서 이 사전의 단어와 발음이 비슷하지만 다르게 인식된 것으로 보이는 표현이 있으면 사전 기준으로 교정하세요. 사전에 없는 경우에도 문맥상 명백히 잘못 인식된 단어·오탈자는 자연스럽게 교정하세요. 다만 원래 의미 자체를 바꾸거나, 원문에 없는 내용을 새로 지어내지는 마세요. 교정이 확실하지 않으면 원문 표현을 그대로 두세요.
 8. 마크다운 문법(**, #, - 등), 코드블록, 번호 매기기 스타일 변경, 부가 설명, 인사말을 절대 쓰지 마세요. 아래 [출력 형식]의 줄바꿈과 기호를 정확히 그대로 따르세요.
 
 [참고 정보]
@@ -658,6 +688,7 @@ function buildChatGPTPrompt(){
 일시: ${state.date}
 장소: ${state.location}
 참석자: ${participantsText}
+회사 전문용어 사전: ${glossaryText}
 
 [원문 - 번호는 음성이 끊긴 지점 기준]
 ${transcript}
@@ -691,6 +722,21 @@ copyPromptBtn.addEventListener('click', async () => {
   }catch(_e){
     applyStatus.textContent = '클립보드 복사가 차단되었습니다. 위 회색 박스에서 직접 드래그하여 복사해주세요.';
   }
+});
+
+const CHATGPT_URL_ENCODED_LIMIT = 6000; // 안전을 위한 보수적인 상한선 (비공식 기능이라 초과 시 깨질 수 있음)
+
+openChatGPTBtn.addEventListener('click', () => {
+  clearError();
+  const prompt = buildChatGPTPrompt();
+  promptPreview.value = prompt;
+  const encoded = encodeURIComponent(prompt);
+  if(encoded.length > CHATGPT_URL_ENCODED_LIMIT){
+    showError(`프롬프트가 너무 깁니다 (원문 ${prompt.length}자 · 인코딩 후 ${encoded.length}자, 기준 ${CHATGPT_URL_ENCODED_LIMIT}자). 이 길이에서는 자동 열기가 중간에 잘리거나 실패할 수 있어 비활성화했습니다. "① 복사" 버튼으로 복사해서 수동으로 붙여넣어주세요.`);
+    return;
+  }
+  window.open(`https://chatgpt.com/?q=${encoded}`, '_blank');
+  applyStatus.textContent = 'chatgpt.com 새 탭이 열렸습니다. 프롬프트가 자동으로 채워져 있는지 확인 후 전송하세요. 답변 받으면 복사해서 아래 ②에 붙여넣고 반영하기를 눌러주세요.';
 });
 
 function parseChatGPTReply(text){
